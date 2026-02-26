@@ -4,7 +4,7 @@ A production-grade backend service that reconciles customer identities across mu
 
 ## Live Endpoint
 
-> **`https://<your-app>.onrender.com/identify`**
+> **`https://identity-reconciliation-service-0xmf.onrender.com/identify`**
 
 ---
 
@@ -96,6 +96,28 @@ The server starts at `http://localhost:3000`.
 | `npm run lint` | Run ESLint |
 | `npm run format` | Format code with Prettier |
 | `npm test` | Run Jest tests |
+
+### API Testing
+
+Use the included test script to verify all endpoints:
+
+```bash
+# Test local development server
+bash test-api.sh
+
+# Test production deployment
+bash test-api.sh https://identity-reconciliation-service-0xmf.onrender.com
+
+# Or use Node.js test script
+node test.js https://identity-reconciliation-service-0xmf.onrender.com
+```
+
+The script tests:
+- Health check endpoint
+- Input validation
+- Primary contact creation
+- Secondary contact linking
+- Contact consolidation scenarios
 
 ---
 
