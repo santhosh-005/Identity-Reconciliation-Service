@@ -20,6 +20,13 @@ A production-grade backend service that reconciles customer identities across mu
 
 ---
 
+## Design Highlights
+
+- **Transactional Integrity:** All identity reconciliation operations (reads, merges, inserts) are wrapped in a single Prisma `$transaction`. This ensures atomicity — if any step fails (e.g., during a primary merge), all changes are rolled back, preventing data corruption from partial updates.
+- **Repository Pattern:** All database access is isolated behind a repository layer. Every repository method accepts an optional transaction client (`tx`), allowing the service layer to coordinate multi-step operations within a single transaction boundary.
+
+---
+
 ## API
 
 ### `POST /identify`

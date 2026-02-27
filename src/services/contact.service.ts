@@ -1,10 +1,13 @@
-import { Contact, LinkPrecedence } from "@prisma/client";
+import { Contact, LinkPrecedence, Prisma } from "@prisma/client";
 import { contactRepository } from "../repositories/contact.repository";
 import { IdentifyResponse } from "../types/contact.types";
+
+type TxClient = Prisma.TransactionClient;
 
 class ContactService {
   /**
    * Main entry point — reconciles identity based on email and/or phoneNumber.
+   * Wraps all DB operations in a single transaction for atomicity.
    *
    * Handles 4 cases:
    *  1. No match → create new primary contact
@@ -16,64 +19,74 @@ class ContactService {
     email?: string,
     phoneNumber?: string
   ): Promise<IdentifyResponse> {
-    // Step 1: Find all contacts matching the given email OR phoneNumber
-    const matchingContacts = await contactRepository.findByEmailOrPhone(
-      email,
-      phoneNumber
-    );
+    return contactRepository.transaction(async (tx) => {
+      // Step 1: Find all contacts matching the given email OR phoneNumber
+      const matchingContacts = await contactRepository.findByEmailOrPhone(
+        email,
+        phoneNumber,
+        tx
+      );
 
-    // Case 1: No matches — create a brand new primary contact
-    if (matchingContacts.length === 0) {
-      const newContact = await contactRepository.create({
-        email: email ?? null,
-        phoneNumber: phoneNumber ?? null,
-        linkPrecedence: LinkPrecedence.primary,
-      });
+      // Case 1: No matches — create a brand new primary contact
+      if (matchingContacts.length === 0) {
+        const newContact = await contactRepository.create(
+          {
+            email: email ?? null,
+            phoneNumber: phoneNumber ?? null,
+            linkPrecedence: LinkPrecedence.primary,
+          },
+          tx
+        );
 
-      return this.buildResponse(newContact, []);
-    }
+        return this.buildResponse(newContact, []);
+      }
 
-    // Step 2: Resolve all distinct primary contacts
-    const primaryContacts = await this.resolvePrimaries(matchingContacts);
+      // Step 2: Resolve all distinct primary contacts
+      const primaryContacts = await this.resolvePrimaries(matchingContacts, tx);
 
-    // Case 4: Two (or more) distinct primaries — merge them
-    if (primaryContacts.length > 1) {
-      await this.mergePrimaries(primaryContacts);
-    }
+      // Case 4: Two (or more) distinct primaries — merge them
+      if (primaryContacts.length > 1) {
+        await this.mergePrimaries(primaryContacts, tx);
+      }
 
-    // After potential merge, the oldest primary is the winner
-    const primaryContact = primaryContacts[0]!;
+      // After potential merge, the oldest primary is the winner
+      const primaryContact = primaryContacts[0]!;
 
-    // Step 3: Gather THE FULL linked group (primary + all secondaries)
-    let allContacts = await contactRepository.findPrimaryWithSecondaries(
-      primaryContact.id
-    );
+      // Step 3: Gather THE FULL linked group (primary + all secondaries)
+      let allContacts = await contactRepository.findPrimaryWithSecondaries(
+        primaryContact.id,
+        tx
+      );
 
-    // Case 2 & 3: Check if a new secondary contact needs to be created
-    const needsNewSecondary = this.hasNewInformation(
-      allContacts,
-      email,
-      phoneNumber
-    );
+      // Case 2 & 3: Check if a new secondary contact needs to be created
+      const needsNewSecondary = this.hasNewInformation(
+        allContacts,
+        email,
+        phoneNumber
+      );
 
-    if (needsNewSecondary) {
-      // Case 3: Create a secondary contact with the new information
-      const newSecondary = await contactRepository.create({
-        email: email ?? null,
-        phoneNumber: phoneNumber ?? null,
-        linkedId: primaryContact.id,
-        linkPrecedence: LinkPrecedence.secondary,
-      });
+      if (needsNewSecondary) {
+        // Case 3: Create a secondary contact with the new information
+        const newSecondary = await contactRepository.create(
+          {
+            email: email ?? null,
+            phoneNumber: phoneNumber ?? null,
+            linkedId: primaryContact.id,
+            linkPrecedence: LinkPrecedence.secondary,
+          },
+          tx
+        );
 
-      allContacts.push(newSecondary);
-    }
+        allContacts.push(newSecondary);
+      }
 
-    // Build and return consolidated response
-    const secondaries = allContacts.filter(
-      (c) => c.id !== primaryContact.id
-    );
+      // Build and return consolidated response
+      const secondaries = allContacts.filter(
+        (c) => c.id !== primaryContact.id
+      );
 
-    return this.buildResponse(primaryContact, secondaries);
+      return this.buildResponse(primaryContact, secondaries);
+    });
   }
 
   /**
@@ -81,7 +94,10 @@ class ContactService {
    * Walks the linkedId chain to find the true primary (handles deep chains).
    * Returns deduplicated primaries sorted by createdAt ascending (oldest first).
    */
-  private async resolvePrimaries(contacts: Contact[]): Promise<Contact[]> {
+  private async resolvePrimaries(
+    contacts: Contact[],
+    tx: TxClient
+  ): Promise<Contact[]> {
     const primaryMap = new Map<number, Contact>();
 
     for (const contact of contacts) {
@@ -89,7 +105,7 @@ class ContactService {
 
       // Walk up the chain if this is a secondary
       while (primary.linkedId !== null) {
-        const parent = await contactRepository.findById(primary.linkedId);
+        const parent = await contactRepository.findById(primary.linkedId, tx);
         if (!parent) break;
         primary = parent;
       }
@@ -104,21 +120,24 @@ class ContactService {
   }
 
   /**
-   * Merges multiple primaries into one.
+   * Merges multiple primaries into one within a transaction.
    * The oldest (index 0) stays as primary.
    * All others become secondary, and their secondaries get re-linked.
    */
-  private async mergePrimaries(primaries: Contact[]): Promise<void> {
+  private async mergePrimaries(
+    primaries: Contact[],
+    tx: TxClient
+  ): Promise<void> {
     const winner = primaries[0]!;
 
     for (let i = 1; i < primaries.length; i++) {
       const loser = primaries[i]!;
 
       // Re-link all existing secondaries of the loser to the winner
-      await contactRepository.relinkSecondaries(loser.id, winner.id);
+      await contactRepository.relinkSecondaries(loser.id, winner.id, tx);
 
       // Demote the loser from primary to secondary
-      await contactRepository.updateToSecondary(loser.id, winner.id);
+      await contactRepository.updateToSecondary(loser.id, winner.id, tx);
     }
   }
 

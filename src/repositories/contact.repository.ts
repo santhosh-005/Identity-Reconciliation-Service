@@ -1,5 +1,7 @@
-import { Contact, LinkPrecedence, Prisma } from "@prisma/client";
+import { Contact, LinkPrecedence, Prisma, PrismaClient } from "@prisma/client";
 import { prisma } from "../config/prisma";
+
+type TxClient = Prisma.TransactionClient;
 
 class ContactRepository {
   /**
@@ -8,8 +10,10 @@ class ContactRepository {
    */
   async findByEmailOrPhone(
     email?: string,
-    phoneNumber?: string
+    phoneNumber?: string,
+    tx?: TxClient
   ): Promise<Contact[]> {
+    const client = tx ?? prisma;
     const conditions: Prisma.ContactWhereInput[] = [];
 
     if (email) {
@@ -21,7 +25,7 @@ class ContactRepository {
 
     if (conditions.length === 0) return [];
 
-    return prisma.contact.findMany({
+    return client.contact.findMany({
       where: {
         deletedAt: null,
         OR: conditions,
@@ -33,8 +37,9 @@ class ContactRepository {
   /**
    * Find a single contact by ID.
    */
-  async findById(id: number): Promise<Contact | null> {
-    return prisma.contact.findUnique({
+  async findById(id: number, tx?: TxClient): Promise<Contact | null> {
+    const client = tx ?? prisma;
+    return client.contact.findUnique({
       where: { id },
     });
   }
@@ -42,8 +47,9 @@ class ContactRepository {
   /**
    * Find all contacts linked to a primary contact (direct secondaries).
    */
-  async findAllLinkedContacts(primaryId: number): Promise<Contact[]> {
-    return prisma.contact.findMany({
+  async findAllLinkedContacts(primaryId: number, tx?: TxClient): Promise<Contact[]> {
+    const client = tx ?? prisma;
+    return client.contact.findMany({
       where: {
         linkedId: primaryId,
         deletedAt: null,
@@ -55,8 +61,9 @@ class ContactRepository {
   /**
    * Find the primary contact and all its secondaries in one query.
    */
-  async findPrimaryWithSecondaries(primaryId: number): Promise<Contact[]> {
-    return prisma.contact.findMany({
+  async findPrimaryWithSecondaries(primaryId: number, tx?: TxClient): Promise<Contact[]> {
+    const client = tx ?? prisma;
+    return client.contact.findMany({
       where: {
         deletedAt: null,
         OR: [{ id: primaryId }, { linkedId: primaryId }],
@@ -69,9 +76,11 @@ class ContactRepository {
    * Create a new contact.
    */
   async create(
-    data: Prisma.ContactUncheckedCreateInput
+    data: Prisma.ContactUncheckedCreateInput,
+    tx?: TxClient
   ): Promise<Contact> {
-    return prisma.contact.create({ data });
+    const client = tx ?? prisma;
+    return client.contact.create({ data });
   }
 
   /**
@@ -79,9 +88,11 @@ class ContactRepository {
    */
   async updateToSecondary(
     id: number,
-    linkedId: number
+    linkedId: number,
+    tx?: TxClient
   ): Promise<Contact> {
-    return prisma.contact.update({
+    const client = tx ?? prisma;
+    return client.contact.update({
       where: { id },
       data: {
         linkedId,
@@ -96,9 +107,11 @@ class ContactRepository {
    */
   async relinkSecondaries(
     fromPrimaryId: number,
-    toPrimaryId: number
+    toPrimaryId: number,
+    tx?: TxClient
   ): Promise<Prisma.BatchPayload> {
-    return prisma.contact.updateMany({
+    const client = tx ?? prisma;
+    return client.contact.updateMany({
       where: {
         linkedId: fromPrimaryId,
         deletedAt: null,
